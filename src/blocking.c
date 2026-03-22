@@ -29,7 +29,9 @@ static void handle_client(int fd)
             return;
         }
 
-        if (write_all(fd, buf, (size_t)n) == -1) {
+        char response[BUF_SIZE + PREFIX_LEN + SUFFIX_LEN];
+        size_t resp_len = format_response(response, buf, (size_t)n);
+        if (write_all(fd, response, resp_len) == -1) {
             perror("write");
             return;
         }
@@ -51,6 +53,7 @@ int run_blocking_server(void)
             continue;
         }
 
+        printf("client connected (fd=%d)\n", client_fd);
         handle_client(client_fd);
         close(client_fd);
     }

@@ -15,6 +15,14 @@ ssize_t write_all(int fd, const char *buf, size_t len)
     return (ssize_t)off;
 }
 
+size_t format_response(char *out, const char *data, size_t len)
+{
+    memcpy(out, PREFIX, PREFIX_LEN);
+    memcpy(out + PREFIX_LEN, data, len);
+    memcpy(out + PREFIX_LEN + len, SUFFIX, SUFFIX_LEN);
+    return PREFIX_LEN + len + SUFFIX_LEN;
+}
+
 int set_non_blocking(int fd)
 {
     int flags = fcntl(fd, F_GETFL);

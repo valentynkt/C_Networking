@@ -1,6 +1,6 @@
 #include "nonblocking.h"
 #include "common.h"
-#include <string.h>
+#include <stdbool.h>
 
 /*
  * Phase 2: Non-Blocking Busy-Poll Echo Server
@@ -15,6 +15,70 @@
  * Feel the problem: run `top` while the server is idle.
  */
 
+typedef struct {
+    int server_fd;
+    int clients[MAX_CLIENTS];
+    int count;
+} server_t;
+
+static void remove_client(server_t *s, int idx)
+{
+    printf("client disconnected (fd=%d)\n", s->clients[idx]);
+    close(s->clients[idx]);
+    s->clients[idx] = s->clients[s->count - 1];
+    s->count--;
+}
+
+static void accept_client(server_t *s)
+{
+    int fd = accept(s->server_fd, NULL, NULL);
+    if (fd == -1) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK)
+            perror("accept");
+        return;
+    }
+    if (set_non_blocking(fd) == -1) {
+        close(fd);
+        return;
+    }
+    if (s->count >= MAX_CLIENTS) {
+        close(fd);
+        return;
+    }
+    s->clients[s->count++] = fd;
+    printf("client connected (fd=%d)\n", fd);
+}
+
+static bool handle_client(server_t *s, int idx)
+{
+    int fd = s->clients[idx];
+    char buf[BUF_SIZE];
+    ssize_t n = read(fd, buf, sizeof(buf));
+
+    if (n == 0) {
+        remove_client(s, idx);
+        return true;
+    }
+    if (n == -1) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+            return false;
+        perror("read");
+        remove_client(s, idx);
+        return true;
+    }
+
+    char response[BUF_SIZE + PREFIX_LEN + SUFFIX_LEN];
+    size_t resp_len = format_response(response, buf, (size_t)n);
+    if (write_all(fd, response, resp_len) == -1) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK)
+            return false;
+        perror("write");
+        remove_client(s, idx);
+        return true;
+    }
+    return false;
+}
+
 int run_nonblocking_server(void)
 {
     int server_fd = create_listener();
@@ -28,59 +92,14 @@ int run_nonblocking_server(void)
 
     printf("[nonblocking] listening on port %d\n", PORT);
 
-    int clients[MAX_CLIENTS];
-    int count = 0;
+    server_t s = { .server_fd = server_fd, .count = 0 };
 
     for (;;) {
-        int client_fd = accept(server_fd, NULL, NULL);
-        if (client_fd == -1) {
-            if (errno != EAGAIN && errno != EWOULDBLOCK) {
-                perror("accept");
-            }
-        } else {
-            if (set_non_blocking(client_fd) == -1) {
-                close(client_fd);
-            } else if (count < MAX_CLIENTS) {
-                clients[count] = client_fd;
-                count++;
-            } else {
-                close(client_fd);
-            }
-        }
+        accept_client(&s);
 
-        for (int i = 0; i < count; i++) {
-            char buf[BUF_SIZE];
-            char response[BUF_SIZE + PREFIX_LEN + SUFFIX_LEN];
-            ssize_t n = read(clients[i], buf, sizeof(buf));
-            if (n == 0) {
-                printf("client disconnected (fd=%d)\n", clients[i]);
-                goto remove_client;
-            }
-            if (n == -1) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
-                    continue;
-                perror("read");
-                goto remove_client;
-            }
-
-            memcpy(response, PREFIX, PREFIX_LEN);
-            memcpy(response + PREFIX_LEN, buf, n);
-            memcpy(response + PREFIX_LEN + n, SUFFIX, SUFFIX_LEN);
-
-            if (write_all(clients[i], response, (size_t)(PREFIX_LEN + n + SUFFIX_LEN)) == -1) {
-                if (errno == EAGAIN || errno == EWOULDBLOCK)
-                    continue;
-                perror("write");
-                goto remove_client;
-            }
-            int dead_fd;
-            continue;
-        remove_client:
-            dead_fd = clients[i];
-            clients[i] = clients[count - 1];
-            count--;
-            i--;
-            close(dead_fd);
+        for (int i = 0; i < s.count; i++) {
+            if (handle_client(&s, i))
+                i--;
         }
     }
 

@@ -21,6 +21,7 @@ static const size_t PREFIX_LEN = sizeof(PREFIX) - 1;
 static const size_t SUFFIX_LEN = sizeof(SUFFIX) - 1;
 
 ssize_t write_all(int fd, const char *buf, size_t len);
+size_t format_response(char *out, const char *data, size_t len);
 int set_non_blocking(int fd);
 int create_listener(void);
 
