@@ -1,0 +1,4 @@
+netpractice
+*.dSYM/
+.vscode/
+docs/CONTEXT.md
