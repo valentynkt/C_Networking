@@ -5,6 +5,7 @@
 #include "blocking.h"
 #include "nonblocking.h"
 #include "select_server.h"
+#include "kqueue_server.h"
 
 static void usage(const char *prog)
 {
@@ -13,6 +14,7 @@ static void usage(const char *prog)
     fprintf(stderr, "  blocking     Phase 1: one client at a time\n");
     fprintf(stderr, "  nonblocking  Phase 2: busy-poll, 100%% CPU\n");
     fprintf(stderr, "  select       Phase 3: kernel-multiplexed\n");
+    fprintf(stderr, "  kqueue       Phase 4: event loop\n");
 }
 
 int main(int argc, char *argv[])
@@ -32,6 +34,9 @@ int main(int argc, char *argv[])
 
     if (strcmp(mode, "select") == 0)
         return run_select_server();
+
+    if (strcmp(mode, "kqueue") == 0)
+        return run_kqueue_server();
 
     fprintf(stderr, "Unknown mode: %s\n", mode);
     usage(argv[0]);
