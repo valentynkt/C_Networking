@@ -1,11 +1,9 @@
 #include "framing.h"
 #include "common.h"
+#include "event_loop.h"
 #include <arpa/inet.h>
 #include <stdbool.h>
 #include <stdlib.h>
-#include <sys/event.h>
-#include <sys/time.h>
-#include <sys/types.h>
 
 #define MAX_CLIENTS_FD 1024
 #define MSG_MAX 4096
@@ -14,65 +12,76 @@
 /*
  * Phase 5: Wire Protocol — Length-Prefixed Framing (kqueue)
  *
- * Same kqueue event loop as Phase 4. What changes: how we interpret bytes.
+ * Same event loop as Phase 4. What changes: how we interpret bytes.
  *
  * Wire format:
  *   [4 bytes: payload length, big-endian uint32][payload bytes]
  *
- * TCP is a byte stream — one read() may return:
- *   - Half a length prefix
- *   - A full message + half of the next
- *   - 3 complete messages concatenated
- *
- * Your job: accumulate bytes per client, extract complete framed
- * messages, echo them back with the same framing.
- *
- * Key syscalls/functions you'll need:
- *   htonl() / ntohl()  — host <-> network byte order
- *   memcpy()           — extract length prefix from buffer
- *   memmove()          — compact buffer after extracting a message
+ * TCP is a byte stream — one read() may return half a message,
+ * two messages, or 1.5 messages. Accumulate per client, parse frames.
  */
 
-/* TODO: define per-client state struct
- *
- * Think about what each client needs:
- *   - Which fd does this client own?
- *   - Where do you accumulate partial reads?
- *   - How do you know how many bytes are in the buffer?
- *   - Is this slot in use?
+typedef struct {
+    bool active;
+    char buf[MSG_MAX + FRAME_HDR_SIZE];
+    size_t len;
+} client_t;
+
+typedef struct {
+    client_t clients[MAX_CLIENTS_FD];
+} framing_state_t;
+
+/* TODO: implement remove_client — el_remove_fd, close, reset client state */
+
+/* TODO: implement send_framed — write [4-byte length][payload] to fd */
+
+/* TODO: implement process_buffer — the framing loop:
+ *   while buf has >= FRAME_HDR_SIZE bytes:
+ *     extract payload_len (ntohl)
+ *     validate payload_len <= MSG_MAX
+ *     if buf has full frame: send_framed echo, memmove compact, continue
+ *     else: break (wait for more data)
  */
 
-/* TODO: define server state struct
- *
- * Same idea as Phase 4's server_t, but now clients carry state
- * beyond just "connected or not".
- */
+/* TODO: implement on_accept — accept, set_non_blocking, el_register_read, init client */
+static void on_accept(event_loop_t *el, int server_fd)
+{
+    (void)el; (void)server_fd;
+}
 
-/* TODO: implement
- *
- * Functions to build (suggested, not required — structure it how you want):
- *
- *   init_server()      — kqueue setup, same as Phase 4
- *   shutdown_server()   — cleanup all clients and fds
- *   accept_client()    — accept + register with kqueue + init client state
- *   remove_client()    — close fd + reset client state
- *   handle_client()    — read bytes, accumulate, extract framed messages, echo
- *   process_buffer()   — the framing state machine: do we have 4 bytes?
- *                         do we have length + payload? extract, compact, repeat
- *   send_framed()      — write [4-byte length][payload] to client
- */
+/* TODO: implement on_read — read into client->buf + client->len, then process_buffer */
+static void on_read(event_loop_t *el, int fd)
+{
+    (void)el; (void)fd;
+}
 
 int run_framing_server(void)
 {
-    /* TODO: your implementation here
-     *
-     * Structure:
-     *   1. create_listener() + set_non_blocking()
-     *   2. init kqueue, register server_fd
-     *   3. Event loop:
-     *      - kevent() blocks until ready fds
-     *      - server_fd ready → accept_client()
-     *      - client_fd ready → read into client's buffer → process_buffer()
-     */
+    int server_fd = create_listener();
+    if (server_fd == -1)
+        return EXIT_FAILURE;
+
+    if (set_non_blocking(server_fd) == -1) {
+        close(server_fd);
+        return EXIT_FAILURE;
+    }
+
+    printf("[framing] listening on port %d\n", PORT);
+
+    framing_state_t state = {0};
+    event_loop_t el;
+
+    if (el_init(&el, server_fd, on_accept, on_read, &state) == -1) {
+        close(server_fd);
+        return EXIT_FAILURE;
+    }
+
+    el_run(&el);
+
+    for (int fd = 0; fd < MAX_CLIENTS_FD; fd++) {
+        if (state.clients[fd].active)
+            close(fd);
+    }
+    el_cleanup(&el);
     return EXIT_FAILURE;
 }
