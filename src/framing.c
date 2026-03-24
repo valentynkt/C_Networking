@@ -31,7 +31,9 @@ typedef struct {
     client_t clients[MAX_CLIENTS_FD];
 } framing_state_t;
 
-/* TODO: implement remove_client — el_remove_fd, close, reset client state */
+static void on_read(event_loop_t *el, int fd);
+
+/* TODO: implement remove_client — el_remove, close, reset client state */
 
 /* TODO: implement send_framed — write [4-byte length][payload] to fd */
 
@@ -43,10 +45,10 @@ typedef struct {
  *     else: break (wait for more data)
  */
 
-/* TODO: implement on_accept — accept, set_non_blocking, el_register_read, init client */
+/* TODO: implement on_accept — accept, set_non_blocking, el_add(el, fd, on_read), init client */
 static void on_accept(event_loop_t *el, int server_fd)
 {
-    (void)el; (void)server_fd;
+    (void)el; (void)server_fd; (void)on_read;
 }
 
 /* TODO: implement on_read — read into client->buf + client->len, then process_buffer */
@@ -71,8 +73,14 @@ int run_framing_server(void)
     framing_state_t state = {0};
     event_loop_t el;
 
-    if (el_init(&el, server_fd, on_accept, on_read, &state) == -1) {
+    if (el_init(&el, &state) == -1) {
         close(server_fd);
+        return EXIT_FAILURE;
+    }
+
+    if (el_add(&el, server_fd, on_accept) == -1) {
+        close(server_fd);
+        el_cleanup(&el);
         return EXIT_FAILURE;
     }
 
@@ -82,6 +90,7 @@ int run_framing_server(void)
         if (state.clients[fd].active)
             close(fd);
     }
+    close(server_fd);
     el_cleanup(&el);
     return EXIT_FAILURE;
 }

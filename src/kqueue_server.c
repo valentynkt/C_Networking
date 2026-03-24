@@ -19,11 +19,13 @@ typedef struct {
     bool is_client[MAX_CLIENTS_FD];
 } kq_state_t;
 
+static void on_read(event_loop_t *el, int fd);
+
 static void remove_client(event_loop_t *el, int fd)
 {
     kq_state_t *state = el->ctx;
     printf("client disconnected (fd=%d)\n", fd);
-    el_remove_fd(el, fd);
+    el_remove(el, fd);
     close(fd);
     state->is_client[fd] = false;
 }
@@ -51,7 +53,7 @@ static void on_accept(event_loop_t *el, int server_fd)
     state->is_client[fd] = true;
     printf("client connected (fd=%d)\n", fd);
 
-    if (el_register_read(el, fd) == -1) {
+    if (el_add(el, fd, on_read) == -1) {
         close(fd);
         state->is_client[fd] = false;
     }
@@ -100,8 +102,14 @@ int run_kqueue_server(void)
     kq_state_t state = {0};
     event_loop_t el;
 
-    if (el_init(&el, server_fd, on_accept, on_read, &state) == -1) {
+    if (el_init(&el, &state) == -1) {
         close(server_fd);
+        return EXIT_FAILURE;
+    }
+
+    if (el_add(&el, server_fd, on_accept) == -1) {
+        close(server_fd);
+        el_cleanup(&el);
         return EXIT_FAILURE;
     }
 
@@ -111,6 +119,7 @@ int run_kqueue_server(void)
         if (state.is_client[fd])
             close(fd);
     }
+    close(server_fd);
     el_cleanup(&el);
     return EXIT_FAILURE;
 }
