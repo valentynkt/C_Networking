@@ -11,7 +11,8 @@
 
 int el_init(event_loop_t *el, void *ctx)
 {
-    memset(el->handlers, 0, sizeof(el->handlers));
+    memset(el->read_handlers, 0, sizeof(el->read_handlers));
+    memset(el->write_handlers, 0, sizeof(el->write_handlers));
     el->ctx = ctx;
 
     el->kq = kqueue();
@@ -31,7 +32,21 @@ int el_add(event_loop_t *el, int fd, el_handler_fn handler)
     if (kevent(el->kq, &ev, 1, NULL, 0, NULL) == -1)
         return -1;
 
-    el->handlers[fd] = handler;
+    el->read_handlers[fd] = handler;
+    return 0;
+}
+
+int el_add_write(event_loop_t *el, int fd, el_handler_fn handler)
+{
+    if (fd < 0 || fd >= MAX_FDS)
+        return -1;
+
+    struct kevent ev;
+    EV_SET(&ev, fd, EVFILT_WRITE, EV_ADD, 0, 0, NULL);
+    if (kevent(el->kq, &ev, 1, NULL, 0, NULL) == -1)
+        return -1;
+
+    el->write_handlers[fd] = handler;
     return 0;
 }
 
@@ -43,7 +58,22 @@ void el_remove(event_loop_t *el, int fd)
     struct kevent ev;
     EV_SET(&ev, fd, EVFILT_READ, EV_DELETE, 0, 0, NULL);
     kevent(el->kq, &ev, 1, NULL, 0, NULL);
-    el->handlers[fd] = NULL;
+    EV_SET(&ev, fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
+    kevent(el->kq, &ev, 1, NULL, 0, NULL);
+
+    el->read_handlers[fd] = NULL;
+    el->write_handlers[fd] = NULL;
+}
+
+void el_remove_write(event_loop_t *el, int fd)
+{
+    if (fd < 0 || fd >= MAX_FDS)
+        return;
+
+    struct kevent ev;
+    EV_SET(&ev, fd, EVFILT_WRITE, EV_DELETE, 0, 0, NULL);
+    kevent(el->kq, &ev, 1, NULL, 0, NULL);
+    el->write_handlers[fd] = NULL;
 }
 
 int el_run(event_loop_t *el)
@@ -61,8 +91,12 @@ int el_run(event_loop_t *el)
 
         for (int i = 0; i < n; i++) {
             int fd = (int)events[i].ident;
-            if (el->handlers[fd])
-                el->handlers[fd](el, fd);
+            short filter = events[i].filter;
+
+            if (filter == EVFILT_READ && el->read_handlers[fd])
+                el->read_handlers[fd](el, fd);
+            else if (filter == EVFILT_WRITE && el->write_handlers[fd])
+                el->write_handlers[fd](el, fd);
         }
     }
 }
