@@ -19,8 +19,6 @@ typedef struct {
     bool is_client[MAX_CLIENTS_FD];
 } kq_state_t;
 
-static void on_read(event_loop_t *el, int fd);
-
 static void remove_client(event_loop_t *el, int fd)
 {
     kq_state_t *state = el->ctx;
@@ -28,35 +26,6 @@ static void remove_client(event_loop_t *el, int fd)
     el_remove(el, fd);
     close(fd);
     state->is_client[fd] = false;
-}
-
-static void on_accept(event_loop_t *el, int server_fd)
-{
-    kq_state_t *state = el->ctx;
-
-    int fd = accept(server_fd, NULL, NULL);
-    if (fd == -1) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK)
-            perror("accept");
-        return;
-    }
-    if (fd >= MAX_CLIENTS_FD) {
-        fprintf(stderr, "fd %d >= MAX_CLIENTS_FD, rejecting\n", fd);
-        close(fd);
-        return;
-    }
-    if (set_non_blocking(fd) == -1) {
-        close(fd);
-        return;
-    }
-
-    state->is_client[fd] = true;
-    printf("client connected (fd=%d)\n", fd);
-
-    if (el_add(el, fd, on_read) == -1) {
-        close(fd);
-        state->is_client[fd] = false;
-    }
 }
 
 static void on_read(event_loop_t *el, int fd)
@@ -83,6 +52,34 @@ static void on_read(event_loop_t *el, int fd)
             perror("write");
             remove_client(el, fd);
         }
+    }
+}
+static void on_accept(event_loop_t *el, int server_fd)
+{
+    kq_state_t *state = el->ctx;
+
+    int fd = accept(server_fd, NULL, NULL);
+    if (fd == -1) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK)
+            perror("accept");
+        return;
+    }
+    if (fd >= MAX_CLIENTS_FD) {
+        fprintf(stderr, "fd %d >= MAX_CLIENTS_FD, rejecting\n", fd);
+        close(fd);
+        return;
+    }
+    if (set_non_blocking(fd) == -1) {
+        close(fd);
+        return;
+    }
+
+    state->is_client[fd] = true;
+    printf("client connected (fd=%d)\n", fd);
+
+    if (el_add(el, fd, on_read) == -1) {
+        close(fd);
+        state->is_client[fd] = false;
     }
 }
 

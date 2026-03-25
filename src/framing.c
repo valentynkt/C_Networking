@@ -3,6 +3,8 @@
 #include "event_loop.h"
 #include <arpa/inet.h>
 #include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 #define MAX_CLIENTS_FD 1024
@@ -31,7 +33,69 @@ typedef struct {
     client_t clients[MAX_CLIENTS_FD];
 } framing_state_t;
 
-static void on_read(event_loop_t *el, int fd);
+static void remove_client(event_loop_t *el, int fd)
+{
+    framing_state_t *state = el->ctx;
+    printf("client disconnected (fd=%d)\n", fd);
+    el_remove(el, fd);
+    close(fd);
+    state->clients[fd].active = false;
+}
+
+static void process_buffer(event_loop_t *el, int fd)
+{
+    framing_state_t *state = el->ctx;
+    client_t *c = &state->clients[fd];
+    while (true) {
+        if (c->len < 4) {
+            return;
+        }
+        uint32_t net_len;
+        memcpy(&net_len, c->buf, FRAME_HDR_SIZE);
+        uint32_t payload_len = ntohl(net_len);
+        if (payload_len > MSG_MAX) {
+            remove_client(el, fd);
+            return;
+        } else if (c->len < 4 + payload_len) {
+            printf("not enough for full frame: (len = %d)\n", (int)c->len);
+            return;
+        }
+    }
+}
+static void on_read(event_loop_t *el, int fd)
+{
+    framing_state_t *state = el->ctx;
+    client_t *c = &state->clients[fd];
+    if (!c->active) {
+        printf("client is inactive (fd=%d)\n", fd);
+        return;
+    }
+    ssize_t n = read(fd, c->buf + c->len, sizeof(c->buf) - c->len);
+
+    if (n == 0) {
+        remove_client(el, fd);
+        return;
+    }
+    if (n == -1) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+            return;
+        perror("read");
+        remove_client(el, fd);
+        return;
+    }
+
+    c->len += n;
+    process_buffer(el, fd);
+
+    char response[BUF_SIZE + PREFIX_LEN + SUFFIX_LEN];
+    size_t resp_len = format_response(response, buf, (size_t)n);
+    if (write_all(fd, response, resp_len) == -1) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            perror("write");
+            remove_client(el, fd);
+        }
+    }
+}
 
 /* TODO: implement remove_client — el_remove, close, reset client state */
 
@@ -48,13 +112,32 @@ static void on_read(event_loop_t *el, int fd);
 /* TODO: implement on_accept — accept, set_non_blocking, el_add(el, fd, on_read), init client */
 static void on_accept(event_loop_t *el, int server_fd)
 {
-    (void)el; (void)server_fd; (void)on_read;
-}
+    framing_state_t *state = el->ctx;
 
-/* TODO: implement on_read — read into client->buf + client->len, then process_buffer */
-static void on_read(event_loop_t *el, int fd)
-{
-    (void)el; (void)fd;
+    int fd = accept(server_fd, NULL, NULL);
+    if (fd == -1) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK)
+            perror("accept");
+        return;
+    }
+    if (fd >= MAX_CLIENTS_FD) {
+        fprintf(stderr, "fd %d >= MAX_CLIENTS_FD, rejecting\n", fd);
+        close(fd);
+        return;
+    }
+    if (set_non_blocking(fd) == -1) {
+        close(fd);
+        return;
+    }
+
+    state->clients[fd] = (client_t){.active = true, .buf = NULL, .len = FRAME_HDR_SIZE};
+
+    printf("client connected (fd=%d)\n", fd);
+
+    if (el_add(el, fd, on_read) == -1) {
+        close(fd);
+        state->clients[fd].active = false;
+    }
 }
 
 int run_framing_server(void)
