@@ -3,9 +3,11 @@
 #include "event_loop.h"
 #include <arpa/inet.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define MAX_CLIENTS_FD 1024
 #define MSG_MAX 4096
@@ -42,6 +44,19 @@ static void remove_client(event_loop_t *el, int fd)
     state->clients[fd].active = false;
 }
 
+static void send_framed(event_loop_t *el, int fd, const char *payload, uint32_t len)
+{
+    uint32_t net_len = htonl(len);
+    char frame[FRAME_HDR_SIZE + MSG_MAX];
+    memcpy(frame, &net_len, FRAME_HDR_SIZE);
+    memcpy(frame + FRAME_HDR_SIZE, payload, len);
+    if (write_all(fd, frame, FRAME_HDR_SIZE + len) == -1) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            perror("write");
+            remove_client(el, fd);
+        }
+    }
+}
 static void process_buffer(event_loop_t *el, int fd)
 {
     framing_state_t *state = el->ctx;
@@ -60,6 +75,11 @@ static void process_buffer(event_loop_t *el, int fd)
             printf("not enough for full frame: (len = %d)\n", (int)c->len);
             return;
         }
+        send_framed(el, fd, c->buf + FRAME_HDR_SIZE, payload_len);
+        size_t frame_size = FRAME_HDR_SIZE + payload_len;
+
+        memmove(c->buf, c->buf + frame_size, c->len - frame_size);
+        c->len -= frame_size;
     }
 }
 static void on_read(event_loop_t *el, int fd)
@@ -86,30 +106,8 @@ static void on_read(event_loop_t *el, int fd)
 
     c->len += n;
     process_buffer(el, fd);
-
-    char response[BUF_SIZE + PREFIX_LEN + SUFFIX_LEN];
-    size_t resp_len = format_response(response, buf, (size_t)n);
-    if (write_all(fd, response, resp_len) == -1) {
-        if (errno != EAGAIN && errno != EWOULDBLOCK) {
-            perror("write");
-            remove_client(el, fd);
-        }
-    }
 }
 
-/* TODO: implement remove_client — el_remove, close, reset client state */
-
-/* TODO: implement send_framed — write [4-byte length][payload] to fd */
-
-/* TODO: implement process_buffer — the framing loop:
- *   while buf has >= FRAME_HDR_SIZE bytes:
- *     extract payload_len (ntohl)
- *     validate payload_len <= MSG_MAX
- *     if buf has full frame: send_framed echo, memmove compact, continue
- *     else: break (wait for more data)
- */
-
-/* TODO: implement on_accept — accept, set_non_blocking, el_add(el, fd, on_read), init client */
 static void on_accept(event_loop_t *el, int server_fd)
 {
     framing_state_t *state = el->ctx;
@@ -130,7 +128,7 @@ static void on_accept(event_loop_t *el, int server_fd)
         return;
     }
 
-    state->clients[fd] = (client_t){.active = true, .buf = NULL, .len = FRAME_HDR_SIZE};
+    state->clients[fd] = (client_t){.active = true};
 
     printf("client connected (fd=%d)\n", fd);
 
