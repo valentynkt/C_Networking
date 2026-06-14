@@ -1,9 +1,22 @@
 # C_Networking
 
-Five phases of a TCP echo server in C, from one-client-at-a-time blocking I/O up
-to a kqueue event loop with a length-prefixed wire protocol and backpressure.
-Each mode is a separate, runnable server — built to understand how a non-blocking
+*One TCP server, built five times — blocking sockets up to a kqueue event loop with its own wire protocol.*
+
+Five phases of a TCP server in C, from one-client-at-a-time blocking I/O up to a
+kqueue event loop with a length-prefixed wire protocol and backpressure. Each
+mode is a separate, runnable server — built to understand how a non-blocking
 server actually works, one I/O model at a time. No dependencies beyond libc.
+
+**What's interesting here:**
+
+- [Five I/O models, one binary](#the-five-phases) — `blocking → nonblocking →
+  select → kqueue → framing`, each runnable on its own
+- [Why each step exists](#how-each-phase-works) — every phase is motivated by a
+  concrete wall the previous one hit
+- [A reusable event loop](#the-event-loop) — `event_loop.c` is what turns "an
+  example" into "a server"
+- [Framing + backpressure](#how-each-phase-works) — length-prefixed messages
+  over a byte stream, with per-client write buffers that stop reading when full
 
 ## The five phases
 
@@ -15,14 +28,30 @@ server actually works, one I/O model at a time. No dependencies beyond libc.
 | `kqueue` | event loop | O(ready) dispatch, register-once, no fd-count limit |
 | `framing` | length-prefixed protocol | message framing + write buffers + backpressure |
 
+## Demo
+
 ```sh
 make                  # builds ./netpractice  (-Wall -Wextra -Werror, ASan+UBSan)
 ./netpractice kqueue  # mode: blocking | nonblocking | select | kqueue | framing
-# in another shell:
-nc localhost 9999
 ```
 
-## The progression, and why each step exists
+The echo modes speak raw bytes — talk to them with `nc`:
+
+```sh
+$ nc localhost 9999
+hello
+hello                 # echoed back
+```
+
+The `framing` server speaks a length-prefixed protocol instead of raw echo;
+drive it with the bundled client:
+
+```sh
+./netpractice framing &
+python3 test_framing.py
+```
+
+## How each phase works
 
 **blocking** — `accept`, then `read`/`write` in a loop. One slow client blocks
 everyone. The baseline that motivates everything after it.
@@ -54,11 +83,33 @@ it drains. The non-trivial part of any real server.
 servers are both written against it — the abstraction that turns "an example"
 into "a server."
 
+## Module map
+
+| File | Responsibility |
+|---|---|
+| `main.c` | Mode dispatch — selects one of the five servers from `argv[1]`. |
+| `blocking.c` | Phase 1: accept-and-serve, one client at a time. |
+| `nonblocking.c` | Phase 2: non-blocking fds, busy-poll over all of them. |
+| `select_server.c` | Phase 3: `select`-multiplexed readiness, single thread. |
+| `kqueue_server.c` | Phase 4: kqueue event loop, register-once dispatch. |
+| `framing.c` | Phase 5: length-prefixed protocol, write buffers, backpressure. |
+| `event_loop.c` | Reusable kqueue wrapper (`el_add` / `el_run` / handler tables). |
+| `common.c` | Shared socket setup: listen socket, bind, set-non-blocking. |
+
+## Build
+
+```sh
+make            # ./netpractice
+make clean      # remove the binary
+```
+
+C17, POSIX. Built with `-Wall -Wextra -Werror` and ASan + UBSan on by default.
+kqueue is macOS/BSD; the Linux port is a small `event_loop.c` swap to epoll.
+
 ## Out of scope
 
 A learning ladder, not a product. No TLS, no HTTP, no threads, no Linux `epoll`
-backend (kqueue is macOS/BSD; the port is a small swap), no pipelining. The point
-is the I/O models, end to end.
+backend, no pipelining. The point is the I/O models, end to end.
 
 ## References
 
