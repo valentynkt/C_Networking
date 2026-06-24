@@ -1,4 +1,5 @@
-netpractice
+server
+*/server
 *.dSYM/
 .vscode/
 docs/CONTEXT.md
